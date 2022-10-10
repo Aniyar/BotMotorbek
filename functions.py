@@ -30,7 +30,7 @@ def get_users():
 def insert_member(data):
     sheet = client.open("Records").worksheet('Members')
     row = [data['id'], data['name'], data['surname'],
-           data['department'], 'member']
+           data['department'], 'member', data['chatId']]
     sheet.append_row(row)
     return
 
@@ -38,13 +38,24 @@ def insert_member(data):
 def get_member(sid):
     sheet = client.open("Records").worksheet('Members')
     members = sheet.get_all_records()
-    member = next((m for m in members if m['StudentId'] == sid), None)
+    member = next((m for m in members if m['ChatId'] == int(sid)), None)
     return member
 
+def get_member_by_studentid(sid):
+    sheet = client.open("Records").worksheet('Members')
+    members = sheet.get_all_records()
+    member = next((m for m in members if m['StudentId'] == int(sid)), None)
+    return member
+
+def get_reports_by_department(department):
+    sheet = client.open("Records").worksheet('Journal')
+    members = sheet.get_all_records()
+    return list(filter(lambda x: x['Department'] == department, members))
 
 def insert_record(data):
+    member = get_member(data['chatId'])
     sheet = client.open("Records").worksheet('Journal')
-    row = [data['id'], data['department'], data['journal'], data['link'], str(
+    row = [member['StudentId'], member['Name'], member['Surname'], member['Department'], data['journal'], data['link'], str(
         datetime.today().date()), datetime.now().time().strftime("%H:%M")]
     sheet.append_row(row)
     return
@@ -86,4 +97,4 @@ def listfiles():
 
 if __name__ == '__main__':
     # upload_file('file_37.jpg')
-    print(get_member(202175390))
+    print(get_reports_by_department('Management'))

@@ -1,5 +1,6 @@
 from time import ctime
 from tkinter import PhotoImage
+from webbrowser import get
 from aiogram import Bot, types
 from aiogram.dispatcher import Dispatcher
 import requests
@@ -12,12 +13,12 @@ from telegram.ext import (
     Filters,
     ConversationHandler,
 )
-import json
+import os
 from functions import *
 
 
 # Определяем константы этапов разговора
-FULLNAME, STUDENTID, DEPARTMENT, JOURNAL, FILEUPLOAD, LOGIN = range(6)
+FULLNAME, STUDENTID, DEPARTMENT, JOURNAL, FILEUPLOAD, LOGIN, APPROVE = range(7)
 
 USERDATA = {}
 
@@ -33,6 +34,12 @@ def start(update, _):
         '(А так же, чтобы собирать контент для инсты и спонсоров).'
         '\n\nРаз в неделю, тебе нужно будет коротко рассказывать выполненных задачах '
         'и прикладывать фото/видео.')
+    member = get_member(update.message.chat.id)
+    if (member):
+        update.message.reply_text(
+        'Вы зашли как ' + member['Name'] + ' ' + member['Surname'] + ' ' + 
+        '/report чтобы добавить запись')
+        return ConversationHandler.END
     update.message.reply_text(
         'А пока, давай познакомимся. '
         'Как тебя зовут? (Имя и фамилия латиницей)')
@@ -40,6 +47,7 @@ def start(update, _):
 
 
 def fullname(update, _):
+    USERDATA['chatId'] = update.message.chat.id
     ans = update.message.text
     if ans.count(' ') != 1:
         update.message.reply_text(
@@ -57,12 +65,18 @@ def incorrect_fullname():
 
 
 def studentid(update, _):
+    USERDATA['chatId'] = update.message.chat.id
     ans = update.message.text
     if ans.isnumeric() == False or len(ans) != 9:
         update.message.reply_text(
             'Кажется, вы ввели некоректные данные:)\nStudent Id должен состоять из 9 цифр')
         return incorrect_id()
     USERDATA['id'] = ans
+    member = get_member(USERDATA['chatId'])
+    if member != None:
+        update.message.reply_text('Мембер ' + member['Name'] + ' ' + member['Surname'] + ' уже существует. Чтобы добавить журнальную запись, напиши /report')
+        return ConversationHandler.END
+    
     reply_keyboard = [['GLV', 'Management',
                        'Chassis', 'Suspension', 'Tractive', 'CV']]
     markup_key = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
@@ -77,48 +91,28 @@ def incorrect_id():
 
 
 def department(update, _):
-    user = update.message.from_user
+    USERDATA['chatId'] = update.message.chat.id
     USERDATA['department'] = update.message.text
     update.message.reply_text(
         'Кратко опиши выполненные задачи (минимум 2 предложения)'
-        'или /skip если еще не готов... я спрошу еще раз перед дедлайном'
-    )
+        'или /skip если еще не готов... я спрошу еще раз перед дедлайном',
+        reply_markup=ReplyKeyboardRemove())
     insert_member(USERDATA)
 
     return JOURNAL
 
 
 def add_work(update, _):
-    if 'id' in USERDATA and 'name' in USERDATA and 'department' in USERDATA:
+    USERDATA['chatId'] = update.message.chat.id
+    member = get_member(USERDATA['chatId'])
+    if member:
+        USERDATA['id'] = member['StudentId']
         update.message.reply_text(
-            'Вы зашли как '
-            + USERDATA['name'] +
             '\nКратко опиши выполненные задачи (минимум 2 предложения)'
             'или /skip если еще не готов... я спрошу еще раз перед дедлайном')
         return JOURNAL
-    update.message.reply_text('Введи Student ID')
-    return LOGIN
-
-
-def login(update, _):
-    USERDATA['id'] = update.message.text
-    member = get_member(int(USERDATA['id']))
-    if member == None:
-        update.message.reply_text(
-            'Похоже, вы ввели неправильный Student ID\n'
-            'Введите Student ID снова, или /start чтобы зарегистрироватьься в системе')
-        return LOGIN
-    USERDATA['name'] = member['Name']
-    USERDATA['surname'] = member['Surname']
-    USERDATA['department'] = member['Department']
-
-    update.message.reply_text(
-        'Вы зашли как '
-        + USERDATA['name'] +
-        '\nКратко опиши выполненные задачи (минимум 2 предложения)'
-        'или /skip если еще не готов... я спрошу еще раз перед дедлайном')
-
-    return JOURNAL
+    update.message.reply_text('Не могу найти тебя в списке мемберов... /start чтобы зарегистрироваться')
+    return ConversationHandler.END
 
 
 def journal(update, _):
@@ -131,32 +125,49 @@ def journal(update, _):
 def fileupload(update, context):
     if update.message.video:
         file_id = update.message.video.file_id
-        print("got video")
     elif update.message.photo:
         file_id = update.message.photo[-1].file_id
     elif update.message.document:
         file_id = update.message.document.file_id
-        print("got document")
 
-    # writing to a custom file
 
-    print(file_id)
+    # downloading file to local folder
     url = f"https://api.telegram.org/bot{TOKEN}/getFile?file_id={file_id}"
     response = requests.get(url).json()
     path = response['result']['file_path']
-    print(path)
     url = f"https://api.telegram.org/file/bot{TOKEN}/{path}"
     response = requests.get(url)
     fname = path.split('/')[1]
-    open(fname, "wb").write(response.content)
+    with open(fname, "wb") as f:
+        f.write(response.content)
 
+    # uploading file to google drive
     USERDATA['link'] = upload_file(fname)
-    insert_record(USERDATA)
-    # Отвечаем на сообщение с фото
+    
+    reply_keyboard = [['Да', 'Нет']]
+    markup_key = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+    
     update.message.reply_text(
-        'Спасибо! Журнальная запись сохранена и отправлена Хэду твоего департмента ;)'
-        'Спишемся через неделю'
+        'Журнальная запись: ' + USERDATA['journal'] + '\nПодтвердить?', reply_markup=markup_key
     )
+    chat_id = update.message.chat_id
+    with open(fname, 'rb') as document:
+        context.bot.send_document(chat_id, document)
+    os.remove(fname)
+    return APPROVE
+
+
+def approve_journal(update, _):
+    if (update.message.text == 'Да'):
+        insert_record(USERDATA)
+        update.message.reply_text(
+            'Спасибо! Журнальная запись сохранена и отправлена Хэду твоего департмента ;)'
+            'Спишемся через неделю', reply_markup=ReplyKeyboardRemove() 
+        )
+    else:
+        update.message.reply_text(
+            'Напиши /report чтобы заполнить журнал заново', reply_markup=ReplyKeyboardRemove()
+        )
     return ConversationHandler.END
 
 
@@ -169,12 +180,8 @@ def skip_journal(update, _):
 
     return ConversationHandler.END
 
-# Обрабатываем команду /cancel если пользователь отменил разговор
-
 
 def cancel(update, _):
-    # определяем пользователя
-    user = update.message.from_user
     # Отвечаем на отказ поговорить
     update.message.reply_text(
         'Мое дело предложить - Ваше отказаться'
@@ -183,6 +190,27 @@ def cancel(update, _):
     # Заканчиваем разговор.
     return ConversationHandler.END
 
+def get_reports(update, _):
+    USERDATA['chatId'] = update.message.chat.id
+    member = get_member(USERDATA['chatId'])
+    if member['status'] == 'member':
+        update.message.reply_text('Вы не обладаете достаточным статусом')
+        return ConversationHandler.END
+    
+    reply_keyboard = [['Сегодня', 'Неделя', 'Все']]
+    markup_key = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+    
+    update.message.reply_text(
+        'Выберите период: ', reply_markup=markup_key
+    )
+
+    reports = get_reports_by_department(member['Department'])
+    for rep in reports:
+        update.message.reply_text('Имя: ' + rep['Name'] + 
+                                    '\nФамилия: ' + rep['Surname'] +
+                                    '\nЗапись: ' + rep['Journal'])
+        fileid = 
+    
 
 if __name__ == '__main__':
     # Создаем Updater и передаем ему токен вашего бота.
@@ -195,7 +223,7 @@ if __name__ == '__main__':
     conv_handler = ConversationHandler(  # здесь строится логика разговора
         # точка входа в разговор
         entry_points=[CommandHandler('start', start), CommandHandler(
-            'add_work', add_work), CommandHandler('file', journal)],
+            'report', add_work), CommandHandler('file', journal)],
         # этапы разговора, каждый со своим списком обработчиков сообщений
         states={
             FULLNAME: [MessageHandler(Filters.text & ~Filters.command, fullname)],
@@ -203,7 +231,7 @@ if __name__ == '__main__':
             DEPARTMENT: [MessageHandler(Filters.regex('^(GLV|Management|Chassis|Suspension|Tractive|CV)$'), department)],
             JOURNAL: [MessageHandler(Filters.text & ~Filters.command, journal), CommandHandler('skip', skip_journal)],
             FILEUPLOAD: [MessageHandler(Filters.photo | Filters.video | Filters.document, fileupload)],
-            LOGIN: [MessageHandler(Filters.text & ~Filters.command, login)],
+            APPROVE: [MessageHandler(Filters.regex('^(Да|Нет)$'), approve_journal)],
         },
         # точка выхода из разговора
         fallbacks=[CommandHandler('cancel', cancel)],

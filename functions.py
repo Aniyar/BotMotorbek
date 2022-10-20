@@ -8,6 +8,9 @@ from googleapiclient.errors import HttpError
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from datetime import datetime
+import io
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
 gauth = GoogleAuth()
 drive = GoogleDrive(gauth)
@@ -49,13 +52,17 @@ def get_member_by_studentid(sid):
 
 def get_reports_by_department(department):
     sheet = client.open("Records").worksheet('Journal')
-    members = sheet.get_all_records()
-    return list(filter(lambda x: x['Department'] == department, members))
+    reports = sheet.get_all_records()
+    return list(filter(lambda x: x['Department'] == department, reports))
+
+def get_all_reports():
+    sheet = client.open("Records").worksheet('Journal')
+    return sheet.get_all_records()
 
 def insert_record(data):
     member = get_member(data['chatId'])
     sheet = client.open("Records").worksheet('Journal')
-    row = [member['StudentId'], member['Name'], member['Surname'], member['Department'], data['journal'], data['link'], str(
+    row = [member['StudentId'], member['Name'], member['Surname'], member['Department'], data['journal'], data['link'], data['fileId'], str(
         datetime.today().date()), datetime.now().time().strftime("%H:%M")]
     sheet.append_row(row)
     return
@@ -78,7 +85,36 @@ def upload_file(fname):
 
     # SHARABLE LINK
     link = gfile['alternateLink']
-    return link
+
+    return link, file_id
+
+def download_file(file_id):
+    try:
+        items = gdservice.files().list(fields="nextPageToken, files(id, name,mimeType)").execute()
+        results = items.get('files', [])
+        fileInfo = list(filter(lambda x: x['id']==file_id, results))
+        if any(fileInfo):
+            mime = fileInfo[0]['mimeType']
+            name = fileInfo[0]['name']
+        else:
+            raise Exception
+
+        request = gdservice.files().get_media(fileId = file_id)
+        file = io.BytesIO()
+        downloader = MediaIoBaseDownload(file, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            print(F'Download {int(status.progress() * 100)}.')
+        
+        with open(name, "wb") as f:
+            f.write(file.getbuffer())
+
+    except Exception as error:
+        print(F'An error occurred: {error}')
+        name = None
+
+    return name
 
 
 def listfiles():

@@ -15,10 +15,11 @@ from telegram.ext import (
 )
 import os
 from functions import *
+from datetime import datetime
 
 
 # Определяем константы этапов разговора
-FULLNAME, STUDENTID, DEPARTMENT, JOURNAL, FILEUPLOAD, LOGIN, APPROVE = range(7)
+FULLNAME, STUDENTID, DEPARTMENT, JOURNAL, FILEUPLOAD, LOGIN, APPROVE, GETREPORTS, GETREPORTSPERIOD = range(9)
 
 USERDATA = {}
 
@@ -141,9 +142,6 @@ def fileupload(update, context):
     with open(fname, "wb") as f:
         f.write(response.content)
 
-    # uploading file to google drive
-    USERDATA['link'] = upload_file(fname)
-    
     reply_keyboard = [['Да', 'Нет']]
     markup_key = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
     
@@ -153,12 +151,16 @@ def fileupload(update, context):
     chat_id = update.message.chat_id
     with open(fname, 'rb') as document:
         context.bot.send_document(chat_id, document)
-    os.remove(fname)
+
+    USERDATA['fname'] = fname
     return APPROVE
 
 
 def approve_journal(update, _):
     if (update.message.text == 'Да'):
+        # uploading file to google drive
+        USERDATA['link'], USERDATA['fileId'] = upload_file(USERDATA['fname'])
+        os.remove(USERDATA['fname'])
         insert_record(USERDATA)
         update.message.reply_text(
             'Спасибо! Журнальная запись сохранена и отправлена Хэду твоего департмента ;)'
@@ -193,23 +195,65 @@ def cancel(update, _):
 def get_reports(update, _):
     USERDATA['chatId'] = update.message.chat.id
     member = get_member(USERDATA['chatId'])
-    if member['status'] == 'member':
+    if member['Status'] == 'member':
         update.message.reply_text('Вы не обладаете достаточным статусом')
         return ConversationHandler.END
     
-    reply_keyboard = [['Сегодня', 'Неделя', 'Все']]
+    USERDATA['status'] = member['Status']
+    USERDATA['department'] = member['Department']
+    reply_keyboard = [['Сегодня', 'Неделя', 'Месяц', 'Все']]
     markup_key = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
     
     update.message.reply_text(
         'Выберите период: ', reply_markup=markup_key
     )
 
-    reports = get_reports_by_department(member['Department'])
+    return GETREPORTSPERIOD
+
+
+def get_reports_period(update, context):
+    period = update.message.text
+    print(period)
+    if USERDATA['status'] == 'admin':
+        reports = get_all_reports()
+    else:
+        reports = get_reports_by_department(USERDATA['department'])
+
+    if period == 'Сегодня':
+        reports = list(filter(lambda x: abs(datetime.strptime(x['Date'], "%Y-%m-%d") - datetime.now()).days <= 1, reports))
+    elif period == 'Неделя':
+        print('im here hehe')
+        reports = list(filter(lambda x: abs(datetime.strptime(x['Date'], "%Y-%m-%d") - datetime.now()).days <= 7, reports))
+    elif period == 'Месяц':
+        reports = list(filter(lambda x: abs(datetime.strptime(x['Date'], "%Y-%m-%d") - datetime.now()).days <= 31, reports))
+    
+    if len(reports) == 0:
+        update.message.reply_text('Хм... Кажется, в выбранный период нет заполненных отчетов...', reply_markup=ReplyKeyboardRemove() 
+        )
+        return ConversationHandler.END
+    
+
+    update.message.reply_text('За выбранный период найдено {} отчетов'.format(len(reports)), reply_markup=ReplyKeyboardRemove() )
     for rep in reports:
-        update.message.reply_text('Имя: ' + rep['Name'] + 
-                                    '\nФамилия: ' + rep['Surname'] +
-                                    '\nЗапись: ' + rep['Journal'])
-        fileid = 
+        update.message.reply_text(
+            'Имя: {} {}\nДепартамент: {} \nЗапись: {} \nСдано: {} {} '.format(rep['Name'], rep['Surname'], rep['Department'], rep['Journal'], rep['Date'], rep['Time'])
+        )
+
+        fname = download_file(rep['FileId'])
+        if fname != None:
+            with open(fname, 'rb') as document:
+                context.bot.send_document(USERDATA['chatId'], document)
+            os.remove(fname)
+        else:
+            update.message.reply_text('Не удалось скачать файл по ссылке {}'.format(rep['FileLink']))
+        
+    return ConversationHandler.END
+
+
+    
+
+
+
     
 
 if __name__ == '__main__':
@@ -223,7 +267,7 @@ if __name__ == '__main__':
     conv_handler = ConversationHandler(  # здесь строится логика разговора
         # точка входа в разговор
         entry_points=[CommandHandler('start', start), CommandHandler(
-            'report', add_work), CommandHandler('file', journal)],
+            'report', add_work), CommandHandler('file', journal), CommandHandler('get_reports', get_reports)],
         # этапы разговора, каждый со своим списком обработчиков сообщений
         states={
             FULLNAME: [MessageHandler(Filters.text & ~Filters.command, fullname)],
@@ -232,6 +276,8 @@ if __name__ == '__main__':
             JOURNAL: [MessageHandler(Filters.text & ~Filters.command, journal), CommandHandler('skip', skip_journal)],
             FILEUPLOAD: [MessageHandler(Filters.photo | Filters.video | Filters.document, fileupload)],
             APPROVE: [MessageHandler(Filters.regex('^(Да|Нет)$'), approve_journal)],
+            GETREPORTS: [MessageHandler(Filters.text, get_reports)],
+            GETREPORTSPERIOD: [MessageHandler(Filters.regex('^(Сегодня|Неделя|Месяц|Все)$'), get_reports_period)]
         },
         # точка выхода из разговора
         fallbacks=[CommandHandler('cancel', cancel)],
